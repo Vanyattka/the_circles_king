@@ -37,6 +37,14 @@ const state = {
   fireworks: [] as Array<{ x: number; y: number; start: number; color: string }>,
   dialogs: [] as Array<{ id: string; text: string; x: number; y: number; start: number }>,
   lastCollisions: new Map<string, number>(),
+  joystick: {
+    active: false,
+    pointerId: null as number | null,
+    baseX: 0,
+    baseY: 0,
+    knobX: 0,
+    knobY: 0
+  },
   input: {
     up: false,
     down: false,
@@ -53,6 +61,9 @@ const DIALOG_DURATION = 1400;
 const COLLISION_COOLDOWN = 900;
 const DEATH_DURATION = 2200;
 const FIREWORK_DURATION = 1800;
+const JOYSTICK_RADIUS = 60;
+const JOYSTICK_KNOB = 24;
+const JOYSTICK_DEADZONE = 12;
 const eventPalette = ["#f7ff5b", "#ff8c2a", "#5bffbd", "#ff5bbd"];
 const dialogLines = [
   "Ты че, баран?",
@@ -65,6 +76,8 @@ const dialogLines = [
   "Ой, прости, не туда"
 ];
 
+const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+
 const backgroundProps = Array.from({ length: 28 }, () => ({
   x: Math.random() * 1200,
   y: Math.random() * 800,
@@ -74,9 +87,19 @@ const backgroundProps = Array.from({ length: 28 }, () => ({
   color: eventPalette[Math.floor(Math.random() * eventPalette.length)]
 }));
 
+const updateJoystickBase = () => {
+  state.joystick.baseX = 90;
+  state.joystick.baseY = canvas.height - 90;
+  if (!state.joystick.active) {
+    state.joystick.knobX = state.joystick.baseX;
+    state.joystick.knobY = state.joystick.baseY;
+  }
+};
+
 const resize = () => {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  updateJoystickBase();
 };
 window.addEventListener("resize", resize);
 resize();
@@ -164,6 +187,21 @@ const spawnFireworks = () => {
   state.fireworks = bursts;
 };
 
+const updateJoystickInput = (dx: number, dy: number) => {
+  state.input.left = dx < -JOYSTICK_DEADZONE;
+  state.input.right = dx > JOYSTICK_DEADZONE;
+  state.input.up = dy < -JOYSTICK_DEADZONE;
+  state.input.down = dy > JOYSTICK_DEADZONE;
+};
+
+const resetJoystick = () => {
+  state.joystick.active = false;
+  state.joystick.pointerId = null;
+  state.joystick.knobX = state.joystick.baseX;
+  state.joystick.knobY = state.joystick.baseY;
+  updateJoystickInput(0, 0);
+};
+
 const connect = () => {
   const roomCode = roomInput.value.trim();
   const nickname = nicknameInput.value.trim();
@@ -195,6 +233,10 @@ const connect = () => {
       state.winnerName = "";
       state.deathBanner = null;
       state.fireworks = [];
+      updateJoystickBase();
+      if (isTouchDevice) {
+        resetJoystick();
+      }
       lobby.style.display = "none";
       updateStatus(`Joined ${message.roomCode}`);
       return;
@@ -245,6 +287,8 @@ const connect = () => {
 
 joinButton.addEventListener("click", connect);
 
+canvas.style.touchAction = "none";
+
 window.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   if (event.code === "KeyW") state.input.up = true;
@@ -268,6 +312,58 @@ window.addEventListener("keyup", (event) => {
   if (event.code === "ArrowLeft") state.input.left = false;
   if (event.code === "ArrowRight") state.input.right = false;
   if (event.code === "Space") state.input.dash = false;
+});
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (!isTouchDevice) return;
+  if (!state.connected) return;
+  if (state.joystick.active) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const dx = x - state.joystick.baseX;
+  const dy = y - state.joystick.baseY;
+  if (Math.hypot(dx, dy) > JOYSTICK_RADIUS * 1.4) return;
+  state.joystick.active = true;
+  state.joystick.pointerId = event.pointerId;
+  canvas.setPointerCapture(event.pointerId);
+  const dist = Math.hypot(dx, dy);
+  const clamped = Math.min(dist, JOYSTICK_RADIUS);
+  const nx = dist > 0 ? dx / dist : 0;
+  const ny = dist > 0 ? dy / dist : 0;
+  state.joystick.knobX = state.joystick.baseX + nx * clamped;
+  state.joystick.knobY = state.joystick.baseY + ny * clamped;
+  updateJoystickInput(dx, dy);
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  if (!isTouchDevice) return;
+  if (!state.joystick.active) return;
+  if (state.joystick.pointerId !== event.pointerId) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const dx = x - state.joystick.baseX;
+  const dy = y - state.joystick.baseY;
+  const dist = Math.hypot(dx, dy);
+  const clamped = Math.min(dist, JOYSTICK_RADIUS);
+  const nx = dist > 0 ? dx / dist : 0;
+  const ny = dist > 0 ? dy / dist : 0;
+  state.joystick.knobX = state.joystick.baseX + nx * clamped;
+  state.joystick.knobY = state.joystick.baseY + ny * clamped;
+  updateJoystickInput(dx, dy);
+});
+
+canvas.addEventListener("pointerup", (event) => {
+  if (!isTouchDevice) return;
+  if (state.joystick.pointerId !== event.pointerId) return;
+  resetJoystick();
+});
+
+canvas.addEventListener("pointercancel", (event) => {
+  if (!isTouchDevice) return;
+  if (state.joystick.pointerId !== event.pointerId) return;
+  resetJoystick();
 });
 
 setInterval(() => {
@@ -417,7 +513,8 @@ const render = () => {
     ctx.fillStyle = "#e5f1ff";
     ctx.font = "12px Trebuchet MS";
     ctx.textAlign = "center";
-    ctx.fillText(player.nickname, player.x, player.y - player.radius - 6);
+    const hpLabel = Math.max(0, Math.round(player.hp));
+    ctx.fillText(`${player.nickname} [${hpLabel}]`, player.x, player.y - player.radius - 6);
   }
 
   emitCollisionDialogs(players);
@@ -443,6 +540,24 @@ const render = () => {
   }
 
   ctx.restore();
+
+  if (isTouchDevice && state.connected) {
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.fillStyle = "rgba(20, 24, 35, 0.5)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(state.joystick.baseX, state.joystick.baseY, JOYSTICK_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
+    ctx.beginPath();
+    ctx.arc(state.joystick.knobX, state.joystick.knobY, JOYSTICK_KNOB, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
   const remaining = Math.max(0, Math.round(from.snapshot.remainingMs / 1000));
   const eventLabel = state.lastEvent ? `Event: ${state.lastEvent.type}` : "";
